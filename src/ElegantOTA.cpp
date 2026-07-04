@@ -7,7 +7,7 @@ void ElegantOTAClass::begin(ELEGANTOTA_WEBSERVER *server, const char * username,
 
   setAuth(username, password);
 
-  #if defined(TARGET_RP2040)
+  #if defined(TARGET_RP2040) || defined(TARGET_RP2350) || defined(PICO_RP2040) || defined(PICO_RP2350)
     if (!__isPicoW) {
       ELEGANTOTA_DEBUG_MSG("RP2040: Not a Pico W, skipping OTA setup\n");
       return;
@@ -16,10 +16,14 @@ void ElegantOTAClass::begin(ELEGANTOTA_WEBSERVER *server, const char * username,
 
   #if ELEGANTOTA_USE_ASYNC_WEBSERVER == 1
     _server->on("/update", HTTP_GET, [&](AsyncWebServerRequest *request){
-      if(_authenticate && !request->authenticate(_username, _password)){
+      if(_authenticate && !request->authenticate(_username.c_str(), _password.c_str())){
         return request->requestAuthentication();
       }
-      AsyncWebServerResponse *response = request->beginResponse_P(200, "text/html", ELEGANT_HTML, sizeof(ELEGANT_HTML));
+      #if defined(ASYNCWEBSERVER_VERSION) && ASYNCWEBSERVER_VERSION_MAJOR > 2  // This means we are using recommended fork of AsyncWebServer
+        AsyncWebServerResponse *response = request->beginResponse(200, "text/html", ELEGANT_HTML, sizeof(ELEGANT_HTML));
+      #else
+        AsyncWebServerResponse *response = request->beginResponse_P(200, "text/html", ELEGANT_HTML, sizeof(ELEGANT_HTML));
+      #endif
       response->addHeader("Content-Encoding", "gzip");
       request->send(response);
     });
@@ -45,7 +49,7 @@ void ElegantOTAClass::begin(ELEGANTOTA_WEBSERVER *server, const char * username,
 
   #else
     _server->on("/update", HTTP_GET, [&](){
-      if (_authenticate && !_server->authenticate(_username, _password)) {
+      if (_authenticate && !_server->authenticate(_username.c_str(), _password.c_str())) {
         return _server->requestAuthentication();
       }
       _server->sendHeader("Content-Encoding", "gzip");
@@ -55,7 +59,7 @@ void ElegantOTAClass::begin(ELEGANTOTA_WEBSERVER *server, const char * username,
 
   #if ELEGANTOTA_USE_ASYNC_WEBSERVER == 1
     _server->on("/ota/start", HTTP_GET, [&](AsyncWebServerRequest *request) {
-      if (_authenticate && !request->authenticate(_username, _password)) {
+      if (_authenticate && !request->authenticate(_username.c_str(), _password.c_str())) {
         return request->requestAuthentication();
       }
 
@@ -104,7 +108,7 @@ void ElegantOTAClass::begin(ELEGANTOTA_WEBSERVER *server, const char * username,
           StreamString str;
           Update.printError(str);
           _update_error_str = str.c_str();
-          _update_error_str += "\n";
+          _update_error_str.concat("\n");
           ELEGANTOTA_DEBUG_MSG(_update_error_str.c_str());
         }
       #elif defined(ESP32)  
@@ -114,9 +118,31 @@ void ElegantOTAClass::begin(ELEGANTOTA_WEBSERVER *server, const char * username,
           StreamString str;
           Update.printError(str);
           _update_error_str = str.c_str();
-          _update_error_str += "\n";
+          _update_error_str.concat("\n");
           ELEGANTOTA_DEBUG_MSG(_update_error_str.c_str());
         }        
+      #elif defined(TARGET_RP2040) || defined(TARGET_RP2350) || defined(PICO_RP2040) || defined(PICO_RP2350)
+        uint32_t update_size = 0;
+        // Gather FS Size
+        if (mode == OTA_MODE_FILESYSTEM) {
+          update_size = ((size_t)&_FS_end - (size_t)&_FS_start);
+          LittleFS.end();
+        } else {
+          FSInfo i;
+          LittleFS.begin();
+          LittleFS.info(i);
+          update_size = i.totalBytes - i.usedBytes;
+        }
+        // Start update process
+        if (!Update.begin(update_size, mode == OTA_MODE_FILESYSTEM ? U_FS : U_FLASH)) {
+          ELEGANTOTA_DEBUG_MSG("Failed to start update process\n");
+          // Save error to string
+          StreamString str;
+          Update.printError(str);
+          _update_error_str = str.c_str();
+          _update_error_str.concat("\n");
+          ELEGANTOTA_DEBUG_MSG(_update_error_str.c_str());
+        }
       #endif
 
       return request->send((Update.hasError()) ? 400 : 200, "text/plain", (Update.hasError()) ? _update_error_str.c_str() : "OK");
@@ -215,7 +241,7 @@ void ElegantOTAClass::begin(ELEGANTOTA_WEBSERVER *server, const char * username,
 
   #else
     _server->on("/ota/start", HTTP_GET, [&]() {
-      if (_authenticate && !_server->authenticate(_username, _password)) {
+      if (_authenticate && !_server->authenticate(_username.c_str(), _password.c_str())) {
         return _server->requestAuthentication();
       }
 
@@ -264,7 +290,7 @@ void ElegantOTAClass::begin(ELEGANTOTA_WEBSERVER *server, const char * username,
           StreamString str;
           Update.printError(str);
           _update_error_str = str.c_str();
-          _update_error_str += "\n";
+          _update_error_str.concat("\n");
           ELEGANTOTA_DEBUG_MSG(_update_error_str.c_str());
         }
       #elif defined(ESP32)  
@@ -274,26 +300,30 @@ void ElegantOTAClass::begin(ELEGANTOTA_WEBSERVER *server, const char * username,
           StreamString str;
           Update.printError(str);
           _update_error_str = str.c_str();
-          _update_error_str += "\n";
+          _update_error_str.concat("\n");
           ELEGANTOTA_DEBUG_MSG(_update_error_str.c_str());
         }
-      #elif defined(TARGET_RP2040)
+      #elif defined(TARGET_RP2040) || defined(TARGET_RP2350) || defined(PICO_RP2040) || defined(PICO_RP2350)
         uint32_t update_size = 0;
         // Gather FS Size
         if (mode == OTA_MODE_FILESYSTEM) {
           update_size = ((size_t)&_FS_end - (size_t)&_FS_start);
           LittleFS.end();
         } else {
-          FSInfo64 i;
+          FSInfo i;
           LittleFS.begin();
-          LittleFS.info64(i);
+          LittleFS.info(i);
           update_size = i.totalBytes - i.usedBytes;
         }
         // Start update process
         if (!Update.begin(update_size, mode == OTA_MODE_FILESYSTEM ? U_FS : U_FLASH)) {
-          ELEGANTOTA_DEBUG_MSG("Failed to start update process because there is not enough space\n");
-          _update_error_str = "Not enough space";
-          return _server->send(400, "text/plain", _update_error_str.c_str());
+          ELEGANTOTA_DEBUG_MSG("Failed to start update process\n");
+          // Save error to string
+          StreamString str;
+          Update.printError(str);
+          _update_error_str = str.c_str();
+          _update_error_str.concat("\n");
+          ELEGANTOTA_DEBUG_MSG(_update_error_str.c_str());
         }
       #endif
 
@@ -303,7 +333,7 @@ void ElegantOTAClass::begin(ELEGANTOTA_WEBSERVER *server, const char * username,
 
   #if ELEGANTOTA_USE_ASYNC_WEBSERVER == 1
     _server->on("/ota/upload", HTTP_POST, [&](AsyncWebServerRequest *request) {
-        if(_authenticate && !request->authenticate(_username, _password)){
+        if(_authenticate && !request->authenticate(_username.c_str(), _password.c_str())){
           return request->requestAuthentication();
         }
         // Post-OTA update callback
@@ -322,7 +352,7 @@ void ElegantOTAClass::begin(ELEGANTOTA_WEBSERVER *server, const char * username,
     }, [&](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
         //Upload handler chunks in data
         if(_authenticate){
-            if(!request->authenticate(_username, _password)){
+            if(!request->authenticate(_username.c_str(), _password.c_str())){
                 return request->requestAuthentication();
             }
         }
@@ -348,7 +378,7 @@ void ElegantOTAClass::begin(ELEGANTOTA_WEBSERVER *server, const char * username,
                 StreamString str;
                 Update.printError(str);
                 _update_error_str = str.c_str();
-                _update_error_str += "\n";
+                _update_error_str.concat("\n");
                 ELEGANTOTA_DEBUG_MSG(_update_error_str.c_str());
             }
         }else{
@@ -427,7 +457,7 @@ void ElegantOTAClass::begin(ELEGANTOTA_WEBSERVER *server, const char * username,
     
   #else
     _server->on("/ota/upload", HTTP_POST, [&](){
-      if (_authenticate && !_server->authenticate(_username, _password)) {
+      if (_authenticate && !_server->authenticate(_username.c_str(), _password.c_str())) {
         return _server->requestAuthentication();
       }
       // Post-OTA update callback
@@ -446,7 +476,7 @@ void ElegantOTAClass::begin(ELEGANTOTA_WEBSERVER *server, const char * username,
       HTTPUpload& upload = _server->upload();
       if (upload.status == UPLOAD_FILE_START) {
         // Check authentication
-        if (_authenticate && !_server->authenticate(_username, _password)) {
+        if (_authenticate && !_server->authenticate(_username.c_str(), _password.c_str())) {
           ELEGANTOTA_DEBUG_MSG("Authentication Failed on UPLOAD_FILE_START\n");
           return;
         }
@@ -471,7 +501,7 @@ void ElegantOTAClass::begin(ELEGANTOTA_WEBSERVER *server, const char * username,
               StreamString str;
               Update.printError(str);
               _update_error_str = str.c_str();
-              _update_error_str += "\n";
+              _update_error_str.concat("\n");
               ELEGANTOTA_DEBUG_MSG(_update_error_str.c_str());
           }
 
@@ -486,11 +516,9 @@ void ElegantOTAClass::begin(ELEGANTOTA_WEBSERVER *server, const char * username,
 }
 
 void ElegantOTAClass::setAuth(const char * username, const char * password){
-  if (strlen(username) > 0 && strlen(password) > 0) {
-    strlcpy(_username, username, sizeof(_username));
-    strlcpy(_password, password, sizeof(_password));
-    _authenticate = true;
-  }
+  _username = username;
+  _password = password;
+  _authenticate = _username.length() && _password.length();
 }
 
 void ElegantOTAClass::clearAuth(){
@@ -507,7 +535,7 @@ void ElegantOTAClass::loop() {
     ELEGANTOTA_DEBUG_MSG("Rebooting...\n");
     #if defined(ESP8266) || defined(ESP32)
       ESP.restart();
-    #elif defined(TARGET_RP2040)
+    #elif defined(TARGET_RP2040) || defined(TARGET_RP2350) || defined(PICO_RP2040) || defined(PICO_RP2350)
       rp2040.reboot();
     #endif
     _reboot = false;
